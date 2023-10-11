@@ -85,12 +85,30 @@ void	Server::sendHttpResponse(int client_fd){
 }
 
 void	Server::recvHttpRequest(int client_fd){
-	char b[1000] = {0,};
-	int a = read(client_fd, b, 1000);
-	std::cout << "read: " << a << std::endl;
+  char    buf[BUF_SIZE] = {0,};
+  Client& cli = _clients[client_fd];
 
+  int n;
+  while ((n = read(client_fd, buf, BUF_SIZE)) != EOF) { cli.addBuf(buf, n); }
 
-	Client& client = _clients[client_fd];
+  int idx;
+  while ((idx = cli.headerEndIdx(cli.getReadIdx())) != -1) {
+    HttpDecoder hd;
+
+    if (hd.execute(const_cast<char*>(cli.subBuf(cli.getReadIdx(), idx).c_str()), idx - cli.getReadIdx())) {
+      HttpRequest req;
+
+      req.setMethod(hd._method);
+      req.setHttpMajor(hd._http_major);
+      req.setHttpMinor(hd._http_minor);
+      req.setContentLength(hd._content_length);
+      req.setHeaderArrived(true);
+      req.setEntityArrived(false);
+
+      cli.addReqs(req);
+    }
+    cli.addReadIdx(idx);
+  }
 	HttpResponse res;
 	res.setHttpMajor(1);
 	res.setHttpMinor(1);
@@ -99,13 +117,13 @@ void	Server::recvHttpRequest(int client_fd){
 	std::map<std::string, std::string> headers;
 	headers["Content-Type"] = "text/html";
 	int fd = open("index.html", O_RDONLY);
-	char *buf = new char[1000];
-	int size = read(fd, buf, 1000);
+	char *bufs = new char[1000];
+	int size = read(fd, bufs, 1000);
 	headers["Content-Length"] = std::to_string(size);
 	res.setHeaders(headers);
-	res.setBody(buf);
+	res.setBody(bufs);
 	res.setBodySize(size);
-	client.addRess(res);
+	cli.addRess(res);
 	change_events(_change_list, client_fd, EVFILT_WRITE, EV_ENABLE, 0, 0, NULL);
 }
 

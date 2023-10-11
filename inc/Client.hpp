@@ -13,6 +13,8 @@ class Client {
     std::vector<HttpResponse>         _ress;
 
     bool                              _has_eof;
+
+
   public:
     const std::vector<char>&          getBuf(void) const;
     const size_t&                     getReadIdx(void) const;
@@ -23,12 +25,15 @@ class Client {
     void                              clearBuf(void);
 
     void                              addBuf(const char* buf, size_t size);
-    void                              addReadIdx(size_t idx);
-    void                              addReqs(HttpRequest& req);
-    void                              addRess(HttpResponse& res);
+    void                              addReadIdx(const size_t idx);
+    void                              addReqs(const HttpRequest& req);
+    void                              addRess(const HttpResponse& res);
 
     void                              clearRess(void);
-    void                              setHasEof(bool has_eof);
+    void                              setHasEof(const bool has_eof);
+
+    int                               headerEndIdx(const size_t& start);
+    const std::string                 subBuf(const size_t start, const size_t end);
 };
 
 #endif
