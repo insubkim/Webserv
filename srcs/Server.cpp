@@ -9,7 +9,7 @@ Server::Server(const char *configure_file) {
 	Host h;
 
 	h.setName("localhost");
-	h.setPort(80);
+	h.setPort(3000);
 
 	RouteRule	r;
 	std::string path = "/";
@@ -62,40 +62,43 @@ void Server::connectClient(int server_socket){
 }
 
 void	Server::sendHttpResponse(int client_fd){
-	Client& client = _clients[client_fd];
-	const std::vector<HttpResponse>& responses = client.getRess();
+  Client& client = _clients[client_fd];
+  const std::vector<HttpResponse>& responses = client.getRess();
 
-	for (size_t i = 0; i < responses.size(); i++){
-		std::string encoded_response = Encoder::execute(responses[i]);
-		const char* buf = encoded_response.c_str();
-		write(client_fd, buf, strlen(buf));
-		buf = responses[i].getBody();
-		write(client_fd, buf, responses[i].getBodySize());
-		std::cout << "send" << std::endl;
-		delete[] buf;
-	}
-	client.clearRess();
-	if (client.getHasEof()){
-		std::cout << "send eof" << std::endl;
-		disconnect_client(client_fd);
-	} else {
-		std::cout << "send alive" << std::endl;
-		change_events(_change_list, client_fd, EVFILT_WRITE, EV_DISABLE, 0, 0, NULL);
-	}
+  for (size_t i = 0; i < responses.size(); i++){
+    std::string encoded_response = Encoder::execute(responses[i]);
+    const char* buf = encoded_response.c_str();
+    write(client_fd, buf, strlen(buf));
+    buf = &(responses[i].getBody())[0];
+    write(client_fd, buf, responses[i].getContentLength());
+    std::cout << "send" << std::endl;
+  }
+  client.clearRess();
+  if (client.getHasEof()){
+    std::cout << "send eof" << std::endl;
+    disconnect_client(client_fd);
+  } else {
+    std::cout << "send alive" << std::endl;
+    change_events(_change_list, client_fd, EVFILT_WRITE, EV_DISABLE, 0, 0, NULL);
+  }
 }
 
-void	Server::recvHttpRequest(int client_fd){
+void	Server::recvHttpRequest(int client_fd) {
   char    buf[BUF_SIZE] = {0,};
   Client& cli = _clients[client_fd];
 
   int n;
   while ((n = read(client_fd, buf, BUF_SIZE)) != EOF) { cli.addBuf(buf, n); }
+  cli.setHasEof(true); // eof가 아닌 경우가 있나요 ?
 
   int idx;
   while ((idx = cli.headerEndIdx(cli.getReadIdx())) != -1) {
     HttpDecoder hd;
+    std::string data = cli.subBuf(cli.getReadIdx(), idx);
 
-    if (hd.execute(const_cast<char*>(cli.subBuf(cli.getReadIdx(), idx).c_str()), idx - cli.getReadIdx())) {
+    if (data.size() != idx - cli.getReadIdx()) return ; // entity 전 null값이 포함된 경우
+
+    if (hd.execute(data.c_str(), data.size()) == data.size()) {
       HttpRequest req;
 
       req.setMethod(hd._method);
@@ -103,32 +106,22 @@ void	Server::recvHttpRequest(int client_fd){
       req.setHttpMinor(hd._http_minor);
       req.setContentLength(hd._content_length);
       req.setHeaderArrived(true);
-      req.setEntityArrived(false);
+      req.setEntityArrived(true);
 
       cli.addReqs(req);
+
+      HttpResponse res;
+
+      res.publish(req);
+      cli.addRess(res);
     }
     cli.addReadIdx(idx);
   }
-	HttpResponse res;
-	res.setHttpMajor(1);
-	res.setHttpMinor(1);
-	res.setStatus(200);
-	res.setStatusMessage("OK");
-	std::map<std::string, std::string> headers;
-	headers["Content-Type"] = "text/html";
-	int fd = open("index.html", O_RDONLY);
-	char *bufs = new char[1000];
-	int size = read(fd, bufs, 1000);
-	headers["Content-Length"] = std::to_string(size);
-	res.setHeaders(headers);
-	res.setBody(bufs);
-	res.setBodySize(size);
-	cli.addRess(res);
-	change_events(_change_list, client_fd, EVFILT_WRITE, EV_ENABLE, 0, 0, NULL);
+  change_events(_change_list, client_fd, EVFILT_WRITE, EV_ENABLE, 0, 0, NULL);
 }
 
 void	Server::recvCgiResponse(int cgi_fd){
-	cgi_fd++;
+	(void)cgi_fd;
 }
 
 void	Server::init(void) {

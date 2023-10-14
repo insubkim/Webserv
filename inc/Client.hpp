@@ -16,6 +16,8 @@ class Client {
 
 
   public:
+    Client();
+
     const std::vector<char>&          getBuf(void) const;
     const size_t&                     getReadIdx(void) const;
     const std::vector<HttpRequest>&   getReqs(void) const;

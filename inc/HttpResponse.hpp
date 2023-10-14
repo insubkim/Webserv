@@ -2,6 +2,9 @@
 #define HTTPRESPONSE_HPP_
 
 #include "HttpDecoder.h"
+#include "HttpRequest.hpp"
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <map>
 
@@ -21,8 +24,7 @@ class HttpResponse {
     bool                                      _is_chunked;
 
     // body
-    char*                                     _body;
-    size_t                                    _body_size;
+    std::vector<char>                         _body;
 
   public:
     const unsigned short&                     getHttpMajor(void) const;
@@ -34,8 +36,7 @@ class HttpResponse {
     const std::map<std::string, std::string>& getHeader(void) const;
     const unsigned long long&                 getContentLength(void) const;
     const bool&                               getIsChunked(void) const;
-    const char*                               getBody(void) const;
-    const size_t&                             getBodySize(void) const;
+    const std::vector<char>&                  getBody(void) const;
 
     void                                      setHttpMajor(unsigned short http_major);
     void                                      setHttpMinor(unsigned short http_minor);
@@ -44,8 +45,9 @@ class HttpResponse {
     void                                      setHeaders(const std::map<std::string, std::string>& headers);
     void                                      setContentLength(unsigned long long content_length);
     void                                      setIsChunked(bool is_chunked);
-    void                                      setBody(const char* body);
-    void                                      setBodySize(size_t body_size);
+    void                                      setBody(const std::vector<char>& body);
+
+    bool                                      publish(const HttpRequest& req);
 };
 
 #endif
