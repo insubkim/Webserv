@@ -38,8 +38,10 @@ void Server::changeEvents(std::vector<struct kevent>& change_list,
 }
 
 void Server::handleErrorKevent(int fd) {
-  if (_server_sockets.find(fd) != _server_sockets.end())
-    throw std::runtime_error("Error: server socket error.");
+  if (_server_sockets.find(fd) == _server_sockets.end()){
+    std::cout << "error fd :"<< fd << std::endl;
+    return ;
+  }
   std::cout << "Client socket error" << std::endl;
   disconnectClient(fd);
 }
@@ -197,8 +199,8 @@ void Server::recvCgiResponse(int cgi_fd) {
 
   int n;
   while ((n = read(cgi_fd, buf, BUF_SIZE)) != 0) {
-    sleep(1);
     if (n == -1) {
+      if (errno == EWOULDBLOCK || errno == EAGAIN) break ; // NON-BLOCK socket read buff 비어있을 때
       throw std::runtime_error("Error: read error.");
     }
     if (n > 0) cgi_handler.addBuf(buf, n);
