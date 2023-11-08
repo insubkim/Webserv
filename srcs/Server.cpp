@@ -192,7 +192,6 @@ void Server::recvHttpRequest(int client_fd, int64_t event_size) {
   int idx;
   if (cli.getReqs().size() > 0) {
     HttpRequest& last_request = cli.backRequest();
-
     if (!last_request.getEntityArrived()) {
       printReq(last_request, cli.getBuf(), false);
       try{
@@ -255,7 +254,6 @@ void Server::recvHttpRequest(int client_fd, int64_t event_size) {
       cli.setEof(true);
     }
   }
-
   std::cout << "response size: " << cli.getRess().size() << '\n' << std::endl;
   if (cli.getRess().size() && cli.getRess().front().getIsReady()) 
     changeEvents(_change_list, client_fd, EVFILT_WRITE, EV_ENABLE, 0, 0, NULL);
@@ -294,10 +292,8 @@ void  Server::recvCgiResponse(int cgi_fd, int64_t event_size) {
   if (n != 0)  return ;
 
   cgi_handler.closeReadPipe();
-  if (n == 0 && cgi_handler.getBuf().size() == 0) return ;
+  if (cgi_handler.getBuf().size() == 0) return ;
   res.setIsReady(true);
-  //enable write event
-  //delete cgi_handler from _cgi_handler
   changeEvents(_change_list, cgi_handler.getClientFd(), EVFILT_WRITE, EV_ENABLE, 0, 0, NULL);
   _cgi_responses_on_pipe.erase(cgi_fd);
 
@@ -313,7 +309,7 @@ void  Server::recvCgiResponse(int cgi_fd, int64_t event_size) {
     res.setStatusMessage("OK");
   } else if ( cgi_type == kClientRedirDoc || cgi_type == kClientRedir){
     res.setStatusMessage("Found");
-  } else if (cgi_type == kLocalRedir){
+  } else if (cgi_type == kLocalRedir){//test 필요.
     // res.setIsReady(false);
     // HttpRequest req = cgi_handler.getRequest();
     // req.setQueries("");
@@ -321,7 +317,7 @@ void  Server::recvCgiResponse(int cgi_fd, int64_t event_size) {
     // initializeCgiProcess(req, cgi_handler.getRouteRule(), req.getHost(), client.getPort(), client.getClientFd());
     // _is_cgi = true;
     // setCgiSetting(cli.backRess());
-    return ;
+    // return ;
   } else {
     const RouteRule& rule = cgi_handler.getRouteRule();
     if (rule.hasErrorPage(404)) {
