@@ -19,7 +19,7 @@
   close UPLOADFILE;
 
   print $query->header ( );
-  print <<END_HTML;
+  print <<END_HTML
 
   <HTML>
   <HEAD>

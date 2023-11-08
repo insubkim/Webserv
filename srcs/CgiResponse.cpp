@@ -13,14 +13,14 @@ CgiResponse::CgiResponse(std::string& s){
     if (line == "\r" || line == "")
       break;
     ss_one_line.str(line);
-    ss_one_line >> key >> value;
-    key.pop_back();
-    value.pop_back();
+    // ss_one_line >> key >> value;
+    std::getline(ss_one_line, key, ':');
+    ss_one_line >> value;
     _headers[key] = value;
     if (ss.eof())
       break ;
   }
-  if (_headers.find("Location") != _headers.end()){
+  if (_headers.find("Location") != _headers.end() || _headers.find("location") != _headers.end()){
     value = _headers["Location"];
     if (value[0] == '/'){
       _status = 300;
@@ -29,13 +29,15 @@ CgiResponse::CgiResponse(std::string& s){
       _status = 302;
       _type = kClientRedir;
     }
-  } else if (_headers.find("Content-type") != _headers.end() || _headers.find("Content-Type") != _headers.end()) {
+  } else if (_headers.find("Content-type") != _headers.end() || _headers.find("Content-Type") != _headers.end() \
+    || _headers.find("content-type") != _headers.end() || _headers.find("content-Type") != _headers.end()) {
       _status = 200;
       _type = kDocument;
   } else {
       _status = 404;
       _type = kError;
   }
+  
   //get body
   line = ss.str().substr(ss.tellg());
 

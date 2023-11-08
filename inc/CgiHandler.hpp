@@ -25,6 +25,7 @@ class CgiHandler {
     void setCgiReqEntityIdx(int idx);
     void setPipe(void) throw(std::runtime_error);
     void setupCgiEnvp(void);
+    void setupCgiArgv(void);
 
     int execute(void) throw(std::runtime_error);
 
@@ -50,7 +51,8 @@ class CgiHandler {
     std::vector<char> _buf;
     int               _client_fd;
 
-
+    char* _envp[30];
+    char* _argv[3];
 };
 
 
