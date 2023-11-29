@@ -306,7 +306,7 @@ void              Server::handleCgiExited(struct kevent& curr_event) {
     Client& client = *(Client *)(curr_event.udata);
     if (client.getEof()) return ;
     HttpResponse& res = client.getResponseByPid(curr_event.ident);
-    if (res.getEof() || res.getIsReady()) return ;
+    if (res.getIsReady()) return ;
     res.publishError(503, &(res.getCgiHandler().getRouteRule()), res.getMethod());
     res.setEof(true);
     if (client.getRess().front().getIsReady())
@@ -326,12 +326,10 @@ void              Server::handleError(struct kevent& curr_event) {
 
 void Server::recvHttpRequest(int client_fd, Client& cli, int64_t event_size) {
   if (cli.getEof()) return ;
-  char    *buf = new char[event_size];
+  
+  int n = read(client_fd, _buf, event_size > BUF_SIZE ? BUF_SIZE : event_size);
 
-  int n = read(client_fd, buf, event_size);
-
-  if (n > 0)  cli.addBuf(buf, n);
-  delete[] buf;
+  if (n > 0)  cli.addBuf(_buf, n);
   if (n == 0) {
     if (cli.getRess().empty())cli.setEof(true);
     else cli.getRess().back().setEof(true);
@@ -424,7 +422,7 @@ void Server::recvHttpRequest(int client_fd, Client& cli, int64_t event_size) {
 void  Server::sendCgiRequest(int cgi_fd, Client& client, int64_t event_size){
   if (client.getEof()) return ;
   HttpResponse& res =  client.getResponseByCgiFd(cgi_fd);
-  if (res.getEof() || res.getIsReady()) return ;
+  if (res.getIsReady()) return ;
   CgiHandler& cgi_handler = res.getCgiHandler();
 
   int n = 0;
@@ -453,13 +451,11 @@ void  Server::sendCgiRequest(int cgi_fd, Client& client, int64_t event_size){
 void  Server::recvCgiResponse(int cgi_fd, Client& client, int64_t event_size) {
   if (client.getEof()) return ;
   HttpResponse& res = client.getResponseByCgiFd(cgi_fd);
-  if (res.getEof() || res.getIsReady()) return ;
-  char    *buf = new char[event_size];
+  if (res.getIsReady()) return ;
   CgiHandler& cgi_handler = res.getCgiHandler();
 
-  int n = read(cgi_fd, buf, event_size);
-  if (n > 0) cgi_handler.addBuf(buf, n);
-  delete[] buf;
+  int n = read(cgi_fd, _buf, event_size > BUF_SIZE ? BUF_SIZE : event_size);
+  if (n > 0) cgi_handler.addBuf(_buf, n);
   if (n < 0)  {
     cgi_handler.closeReadPipe();
     res.publishError(503, &cgi_handler.getRouteRule(), res.getMethod());

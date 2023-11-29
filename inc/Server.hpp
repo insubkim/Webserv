@@ -27,6 +27,8 @@
 #define KEEPALIVETIMEOUT 6000
 #define SESSIONTIMELIMIT 1200
 
+#define BUF_SIZE 1000000
+
 class Server {
  private:
   enum Event {
@@ -54,6 +56,8 @@ class Server {
 
   std::set<Client>                            _clients;
   std::set<Client*>                           _clients_address;
+
+  char                                        _buf[BUF_SIZE];
 
   void              handleErrorKevent(int ident, void *udata);
   void              connectClient(int server_socket);
