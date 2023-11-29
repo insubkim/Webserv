@@ -11,21 +11,21 @@
 #define DEBUG_DETAIL_RAWDATA (DEBUGMOD & 1)
 #define DEBUG_DETAIL_KEVENT  (DEBUGMOD & 1)
 
-void printKeventLog(const int& new_event, const int& i, const struct kevent* curr_event) {
+void printKeventLog(const int& new_event, const int& i, const struct kevent& curr_event) {
   if (!DEBUG_DETAIL_KEVENT) return;
-  if (curr_event->filter == EVFILT_TIMER) return;
+  if (curr_event.filter == EVFILT_TIMER) return;
 
   std::string evfilt_str;
-  if (curr_event->filter == EVFILT_READ) evfilt_str = "READ";
-  else if (curr_event->filter == EVFILT_WRITE) evfilt_str = "WRITE";
-  else if (curr_event->filter == EVFILT_PROC) evfilt_str = "PROCESS";
+  if (curr_event.filter == EVFILT_READ) evfilt_str = "READ";
+  else if (curr_event.filter == EVFILT_WRITE) evfilt_str = "WRITE";
+  else if (curr_event.filter == EVFILT_PROC) evfilt_str = "PROCESS";
   std::cout << "EVFILT: " << evfilt_str << std::endl ;
 
-  if (curr_event->flags & EV_ERROR) std::cout << "EV_ERROR!" << std::endl;
-  if (curr_event->flags & EV_EOF) std::cout << "EV_EOF!" << std::endl;
+  if (curr_event.flags & EV_ERROR) std::cout << "EV_ERROR!" << std::endl;
+  if (curr_event.flags & EV_EOF) std::cout << "EV_EOF!" << std::endl;
 
   std::cout << "New kevent :" << new_event << " cur idx: " << i << std::endl;
-  std::cout << "curr ident: " << curr_event->ident << ", data: " << curr_event->data << std::endl;
+  std::cout << "curr ident: " << curr_event.ident << ", data: " << curr_event.data << std::endl;
   std::cout << std::endl;
 }
 
@@ -159,9 +159,6 @@ void Server::connectClient(int server_socket) {
 }
 
 void Server::sendHttpResponse(int client_fd, Client& client, int64_t event_size) { 
-  
-  // send 도중 timeout 걸리면 문제 발생 가능성 있음.
-  
   std::queue<HttpResponse>& responses = client.getRess();
   const char* buf;
   int         idx;
@@ -224,6 +221,108 @@ void  Server::setCgiSetting(HttpResponse& res, Client& client, const std::map<st
   changeEvents(_change_list, cgi_pid, EVFILT_PROC, EV_ADD | EV_ONESHOT, NOTE_EXIT, 0, &client);
   std::cout << "create cgi process, pid: " << cgi_pid  << ", pipe_fd: " << res.getCgiPipeIn() << std::endl;
 }
+
+bool  Server::isClientEvent(struct kevent& curr_event) const {
+  return _clients_address.count((Client*)curr_event.udata) 
+      && ((Client*)curr_event.udata)->getClientFd() == (int)curr_event.ident;
+}
+
+bool  Server::isServerEvent(struct kevent& curr_event) const {
+  return _server_sockets.count(curr_event.ident);
+}
+
+bool  Server::isCgiEvent(struct kevent& curr_event) const {
+  return _clients_address.count((Client*)curr_event.udata) 
+      && (*(Client*)curr_event.udata).hasCgiFd(curr_event.ident);
+}
+
+int  Server::identfyEvent(struct kevent& curr_event) const {
+  if (curr_event.flags & EV_ERROR) return kEventError; //if error call error handler.
+  switch (curr_event.filter)
+  {
+  case EVFILT_READ:
+    if (isServerEvent(curr_event)) return kEventConnectNewClient;
+    else if (isCgiEvent(curr_event)) return kEventReadCgiResponse; 
+    else if (isClientEvent(curr_event)) 
+      return curr_event.flags & EV_EOF ? kEventClientClosedSocket : kEventReadClientRequest;
+    break;
+  case EVFILT_WRITE:
+    if (isClientEvent(curr_event)) return kEventWriteClientRequest;
+    else if (isCgiEvent(curr_event)) return kEventWriteCgiRequest; 
+    break;
+  case EVFILT_TIMER:
+    return kEventCheckTime;
+    break;
+  case EVFILT_PROC:
+    return kEventCgiExited;
+    break;
+  default:
+    break;
+  }
+  return kEventIgnore;
+}
+
+
+void              Server::handleConnectNewClient(struct kevent& curr_event) {
+  connectClient(curr_event.ident);
+}
+
+void              Server::handleClientClosedSocket(struct kevent& curr_event) {
+  disconnectClient((Client*)curr_event.udata);
+}
+
+void              Server::handleReadClientRequest(struct kevent& curr_event) {
+  Client& client = *(Client*)curr_event.udata;
+  client.setLastRequestTime(getTime());
+  try{
+    recvHttpRequest(curr_event.ident, client, curr_event.data);
+  } catch (std::exception& e) { //fork, pipe exception
+    std::cout << e.what() << std::endl;
+    HttpResponse& res = client.getRess().back();
+    res.publishError(502, &(res.getCgiHandler().getRouteRule()), res.getMethod());
+    if (client.getRess().front().getIsReady())
+      changeEvents(_change_list, res.getCgiHandler().getClientFd(), EVFILT_WRITE, EV_ENABLE, 0, 0, &client);
+    res.setEof(true);
+  }
+}
+
+void              Server::handleWriteClientRequest(struct kevent& curr_event) {
+  sendHttpResponse(curr_event.ident, *(Client*)curr_event.udata, curr_event.data);
+}
+
+void              Server::handleReadCgiResponse(struct kevent& curr_event) {
+  recvCgiResponse(curr_event.ident, *(Client*)curr_event.udata, curr_event.data);
+}
+
+void              Server::handleWriteCgiRequest(struct kevent& curr_event) {
+  sendCgiRequest(curr_event.ident, *(Client*)curr_event.udata, curr_event.data);
+}
+
+void              Server::handleCgiExited(struct kevent& curr_event) {
+  int status = -1;
+  waitpid(curr_event.ident, &status, WNOHANG);
+  std::cout << "waitpid :" << curr_event.ident << " status: " << WEXITSTATUS(status) << std::endl;
+  if (WEXITSTATUS(status) != 0 && _clients_address.count((Client*)curr_event.udata)) {
+    Client& client = *(Client *)(curr_event.udata);
+    if (client.getEof()) return ;
+    HttpResponse& res = client.getResponseByPid(curr_event.ident);
+    if (res.getEof() || res.getIsReady()) return ;
+    res.publishError(503, &(res.getCgiHandler().getRouteRule()), res.getMethod());
+    res.setEof(true);
+    if (client.getRess().front().getIsReady())
+      changeEvents(_change_list, res.getCgiHandler().getClientFd(), EVFILT_WRITE, EV_ENABLE, 0, 0, &client);
+  }
+}
+
+void              Server::handleCheckTime(struct kevent& curr_event) {
+  (void)curr_event.udata;
+  checkTimeout();
+}
+
+void              Server::handleError(struct kevent& curr_event) {
+  handleErrorKevent(curr_event.ident, curr_event.udata);
+}
+
 
 void Server::recvHttpRequest(int client_fd, Client& cli, int64_t event_size) {
   if (cli.getEof()) return ;
@@ -325,7 +424,7 @@ void Server::recvHttpRequest(int client_fd, Client& cli, int64_t event_size) {
 void  Server::sendCgiRequest(int cgi_fd, Client& client, int64_t event_size){
   if (client.getEof()) return ;
   HttpResponse& res =  client.getResponseByCgiFd(cgi_fd);
-  if (res.getEof()) return ;
+  if (res.getEof() || res.getIsReady()) return ;
   CgiHandler& cgi_handler = res.getCgiHandler();
 
   int n = 0;
@@ -351,12 +450,11 @@ void  Server::sendCgiRequest(int cgi_fd, Client& client, int64_t event_size){
   if (DEBUGMOD && DEBUG_DETAIL_KEVENT)  std::cout << "send end"  << std::endl;
 }
 
-
 void  Server::recvCgiResponse(int cgi_fd, Client& client, int64_t event_size) {
   if (client.getEof()) return ;
-  char    *buf = new char[event_size];
   HttpResponse& res = client.getResponseByCgiFd(cgi_fd);
-  if (res.getEof()) return ;
+  if (res.getEof() || res.getIsReady()) return ;
+  char    *buf = new char[event_size];
   CgiHandler& cgi_handler = res.getCgiHandler();
 
   int n = read(cgi_fd, buf, event_size);
@@ -437,65 +535,46 @@ void Server::run(void) {
   std::cout << "Server started." << '\n' << std::endl;
   int new_event;
   struct kevent event_list[EVENT_LIST_SIZE];
-  struct kevent* curr_event;
   while (1) {
     new_event = kevent(_kq, &(_change_list[0]), _change_list.size(), event_list,
                        EVENT_LIST_SIZE, NULL);
     if (new_event == -1) throw std::runtime_error("Error: kevent fail.");
     _change_list.clear();
     for (int i = 0; i < new_event; ++i) {
-      curr_event = &event_list[i];
+      struct kevent& curr_event = event_list[i];
       if (DEBUGMOD) printKeventLog(new_event, i, curr_event);
-      // error event
-      if (curr_event->flags & EV_ERROR) {
-        handleErrorKevent(curr_event->ident, curr_event->udata);
-      // cgi process exit event
-      } else if (curr_event->filter == EVFILT_PROC && (curr_event->fflags & NOTE_EXIT)) {
-        int status = -1;
-        waitpid(curr_event->ident, &status, WNOHANG);
-        std::cout << "waitpid :" << curr_event->ident << " status: " << WEXITSTATUS(status) << std::endl;
-        if (WEXITSTATUS(status) != 0 && _clients_address.count((Client*)curr_event->udata)) {
-          Client& client = *(Client *)(curr_event->udata);
-          if (client.getEof()) continue ;
-          HttpResponse& res = client.getResponseByPid(curr_event->ident);
-          if (res.getEof()) continue ;
-          res.publishError(503, &(res.getCgiHandler().getRouteRule()), res.getMethod());
-          res.setEof(true);
-          if (client.getRess().front().getIsReady())
-            changeEvents(_change_list, res.getCgiHandler().getClientFd(), EVFILT_WRITE, EV_ENABLE, 0, 0, &client);
-        }
-      } else if ((curr_event->flags & EV_EOF) && _clients_address.count((Client*)curr_event->udata) 
-                && ((Client*)curr_event->udata)->getClientFd() == (int)curr_event->ident) {
-        if(DEBUG_DETAIL_KEVENT) std::cout << "+ Socket disconnect event" << std::endl;
-        disconnectClient((Client*)curr_event->udata);
-      } else if (curr_event->filter == EVFILT_TIMER) {  // timer event
-        checkTimeout();
-      } else if (curr_event->filter == EVFILT_READ) {
-        if (_server_sockets.count(curr_event->ident)) {  // socket read event
-          connectClient(curr_event->ident);
-        } else if (_clients_address.count((Client*)curr_event->udata) 
-                && ((Client*)curr_event->udata)->getClientFd() == (int)curr_event->ident) {  // client read event
-          Client& client = *(Client*)curr_event->udata;
-          client.setLastRequestTime(getTime());
-          try{
-            recvHttpRequest(curr_event->ident, client, curr_event->data);
-          } catch (std::exception& e) { //fork, pipe exception
-            std::cout << e.what() << std::endl;
-            HttpResponse& res = client.getRess().back();
-            res.publishError(502, &(res.getCgiHandler().getRouteRule()), res.getMethod());
-            if (client.getRess().front().getIsReady())
-              changeEvents(_change_list, res.getCgiHandler().getClientFd(), EVFILT_WRITE, EV_ENABLE, 0, 0, &client);
-            res.setEof(true);
-          }
-        } else if (_clients_address.count((Client*)curr_event->udata)) {  // cgi read event
-          recvCgiResponse(curr_event->ident, *(Client*)curr_event->udata, curr_event->data);
-        }
-      } else if (curr_event->filter == EVFILT_WRITE && _clients_address.count((Client*)curr_event->udata)) {  //write event
-        if (((Client*)curr_event->udata)->getClientFd() == (int)curr_event->ident){ // client write event
-          sendHttpResponse(curr_event->ident, *(Client*)curr_event->udata, curr_event->data);
-        } else { // cgi write event
-          sendCgiRequest(curr_event->ident, *(Client*)curr_event->udata, curr_event->data);
-        }
+
+      switch (identfyEvent(curr_event))
+      {
+      case kEventConnectNewClient: 
+        handleConnectNewClient(curr_event);
+        break;
+      case kEventClientClosedSocket:
+        handleClientClosedSocket(curr_event);
+        break; 
+      case kEventReadClientRequest:
+        handleReadClientRequest(curr_event);
+        break;
+      case kEventWriteClientRequest: 
+        handleWriteClientRequest(curr_event);
+        break;  
+      case kEventReadCgiResponse: 
+        handleReadCgiResponse(curr_event);
+        break;
+      case kEventWriteCgiRequest: 
+        handleWriteCgiRequest(curr_event);
+        break;
+      case kEventCgiExited:
+        handleCgiExited(curr_event);
+        break;
+      case kEventCheckTime:
+        handleCheckTime(curr_event);
+        break;       
+      case kEventError: 
+        handleError(curr_event);
+        break;
+      default:
+        break;
       }
     }
   }
@@ -539,3 +618,61 @@ void      Server::checkTimeout(void){
 
 bool                                                       Server::isJoinedSession(const std::string& session_id) { return _session_blocks.find(session_id) != _session_blocks.end(); }
 const std::map<std::string, SessionBlock>::const_iterator  Server::getSessionBlock(const std::string& session_id) { return _session_blocks.find(session_id); }
+
+
+
+
+/*
+
+ if (curr_event.flags & EV_ERROR) {
+        handleErrorKevent(curr_event.ident, curr_event.udata);
+      // cgi process exit event
+      } else if (curr_event.filter == EVFILT_PROC && (curr_event.fflags & NOTE_EXIT)) {
+        int status = -1;
+        waitpid(curr_event.ident, &status, WNOHANG);
+        std::cout << "waitpid :" << curr_event.ident << " status: " << WEXITSTATUS(status) << std::endl;
+        if (WEXITSTATUS(status) != 0 && _clients_address.count((Client*)curr_event.udata)) {
+          Client& client = *(Client *)(curr_event.udata);
+          if (client.getEof()) continue ;
+          HttpResponse& res = client.getResponseByPid(curr_event.ident);
+          if (res.getEof()) continue ;
+          res.publishError(503, &(res.getCgiHandler().getRouteRule()), res.getMethod());
+          res.setEof(true);
+          if (client.getRess().front().getIsReady())
+            changeEvents(_change_list, res.getCgiHandler().getClientFd(), EVFILT_WRITE, EV_ENABLE, 0, 0, &client);
+        }
+      } else if ((curr_event.flags & EV_EOF) && _clients_address.count((Client*)curr_event.udata) 
+                && ((Client*)curr_event.udata)->getClientFd() == (int)curr_event.ident) {
+        if(DEBUG_DETAIL_KEVENT) std::cout << "+ Socket disconnect event" << std::endl;
+        disconnectClient((Client*)curr_event.udata);
+      } else if (curr_event.filter == EVFILT_TIMER) {  // timer event
+        checkTimeout();
+      } else if (curr_event.filter == EVFILT_READ) {
+        if (_server_sockets.count(curr_event.ident)) {  // socket read event
+          connectClient(curr_event.ident);
+        } else if (_clients_address.count((Client*)curr_event.udata) 
+                && ((Client*)curr_event.udata)->getClientFd() == (int)curr_event.ident) {  // client read event
+          Client& client = *(Client*)curr_event.udata;
+          client.setLastRequestTime(getTime());
+          try{
+            recvHttpRequest(curr_event.ident, client, curr_event.data);
+          } catch (std::exception& e) { //fork, pipe exception
+            std::cout << e.what() << std::endl;
+            HttpResponse& res = client.getRess().back();
+            res.publishError(502, &(res.getCgiHandler().getRouteRule()), res.getMethod());
+            if (client.getRess().front().getIsReady())
+              changeEvents(_change_list, res.getCgiHandler().getClientFd(), EVFILT_WRITE, EV_ENABLE, 0, 0, &client);
+            res.setEof(true);
+          }
+        } else if (_clients_address.count((Client*)curr_event.udata)) {  // cgi read event
+          recvCgiResponse(curr_event.ident, *(Client*)curr_event.udata, curr_event.data);
+        }
+      } else if (curr_event.filter == EVFILT_WRITE && _clients_address.count((Client*)curr_event.udata)) {  //write event
+        if (((Client*)curr_event.udata)->getClientFd() == (int)curr_event.ident){ // client write event
+          sendHttpResponse(curr_event.ident, *(Client*)curr_event.udata, curr_event.data);
+        } else { // cgi write event
+          sendCgiRequest(curr_event.ident, *(Client*)curr_event.udata, curr_event.data);
+        }
+      }
+
+*/

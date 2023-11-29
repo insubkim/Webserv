@@ -116,6 +116,7 @@ void                                Client::setTimeOutMessageIdx(const int& idx)
 void                                Client::addResponseByFd(int fd, HttpResponse* res) { _http_responses_by_fd[fd]= res; }
 void                                Client::addResponseByPid(int pid, HttpResponse* res) { _http_responses_by_pid[pid] = res; }
 
+bool                                Client::hasCgiFd(int fd) const { return _http_responses_by_fd.count(fd); }
 
 
 bool                                Client::operator<(const Client& other) const {

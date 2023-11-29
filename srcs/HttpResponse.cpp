@@ -92,12 +92,6 @@ void                                      HttpResponse::publish(const HttpReques
       publishError(404, 0, _method);
       return ;
     }
-    // if (rule->getIsCgi()){
-    //   //cgi set
-    //   initializeCgiProcess(req, *rule, req.getHost(), client.getPort(), client.getClientFd());
-    //   _is_cgi = true;
-    //   return ;
-    // }
     const std::string  suffix_of_location(location.substr(rule->getRoute().size(), location.size() - rule->getRoute().size()));
     _headers["Content-Type"] = "text/html";
     _headers["Connection"] = "keep-alive";

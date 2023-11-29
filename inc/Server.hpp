@@ -24,11 +24,24 @@
 
 #define BACKLOG 512
 #define EVENT_LIST_SIZE 512
-#define KEEPALIVETIMEOUT 3
+#define KEEPALIVETIMEOUT 6000
 #define SESSIONTIMELIMIT 1200
 
 class Server {
  private:
+  enum Event {
+    kEventConnectNewClient = 0,
+    kEventClientClosedSocket,
+    kEventReadClientRequest,
+    kEventWriteClientRequest,
+    kEventReadCgiResponse,
+    kEventWriteCgiRequest,
+    kEventCgiExited,
+    kEventCheckTime,
+    kEventError,
+    kEventIgnore,
+  };
+
   Host                                        _default_host;
   std::map<std::pair<std::string, int>, Host> _hosts;
 
@@ -42,6 +55,31 @@ class Server {
   std::set<Client>                            _clients;
   std::set<Client*>                           _clients_address;
 
+  void              handleErrorKevent(int ident, void *udata);
+  void              connectClient(int server_socket);
+  void              disconnectClient(Client* client);
+  void              recvHttpRequest(int client_fd, Client& client, int64_t event_size);
+  void              sendHttpResponse(int client_fd, Client& client, int64_t event_size);
+  void              recvCgiResponse(int cgi_fd, Client& client, int64_t event_size);
+  void              sendCgiRequest(int cgi_fd, Client& client, int64_t event_size);
+  void              checkTimeout(void);
+
+  int               identfyEvent(struct kevent& curr_event) const;
+
+  bool              isClientEvent(struct kevent& curr_event) const;
+  bool              isServerEvent(struct kevent& curr_event) const;
+  bool              isCgiEvent(struct kevent& curr_event) const;
+
+  void              handleConnectNewClient(struct kevent& curr_event);
+  void              handleClientClosedSocket(struct kevent& curr_event);
+  void              handleReadClientRequest(struct kevent& curr_event);
+  void              handleWriteClientRequest(struct kevent& curr_event);
+  void              handleReadCgiResponse(struct kevent& curr_event);
+  void              handleWriteCgiRequest(struct kevent& curr_event);
+  void              handleCgiExited(struct kevent& curr_event);
+  void              handleCheckTime(struct kevent& curr_event);
+  void              handleError(struct kevent& curr_event);
+
 
   void              setSocketOption(int socket_fd);
 
@@ -49,22 +87,11 @@ class Server {
                      int16_t filter, uint16_t flags, uint32_t fflags,
                      intptr_t data, void *udata);
 
-  void              handleErrorKevent(int ident, void *udata);
-  void              disconnectClient(Client* client);
-  void              connectClient(int server_socket);
-
-  void              sendHttpResponse(int client_fd, Client& client, int64_t event_size);
-  void              recvHttpRequest(int client_fd, Client& client, int64_t event_size);
-
-  void              sendCgiRequest(int cgi_fd, Client& client, int64_t event_size);
-  void              recvCgiResponse(int cgi_fd, Client& client, int64_t event_size);
   void              setCgiSetting(HttpResponse& res, Client& client, const std::map<std::string, SessionBlock>::const_iterator& sbi, bool is_joined_session); 
-
   const RouteRule*  findRouteRule(const HttpRequest& req, const int& host_port);
 
   time_t            getTime(void);  //return seconds
-  void              checkTimeout(void);
-
+  
  public:
   Server(const char *configure_file);
   ~Server();

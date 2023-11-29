@@ -81,6 +81,8 @@ class Client {
     void                                addResponseByFd(int fd, HttpResponse* res);
     void                                addResponseByPid(int fd, HttpResponse* res);
 
+    bool                                hasCgiFd(int fd) const;
+
     bool                                operator<(const Client& other) const;
 };
 
