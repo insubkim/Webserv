@@ -71,7 +71,7 @@ class Client {
     void                                setEof(bool has_eof);
 
     int                                 headerEndIdx(const size_t& start);
-    const std::vector<char>             subBuf(const size_t start, const size_t end);
+    void                                subBuf(const size_t start, const size_t end, std::vector<char>& sub_buf);
 
     void                                setLastRequestTime(const time_t& last_request_time);
     void                                setTimeoutInterval(const time_t& timeout_interval);

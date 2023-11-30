@@ -96,10 +96,8 @@ int                                 Client::headerEndIdx(const size_t& start) {
   return -1;
 }
 
-const std::vector<char>  Client::subBuf(const size_t start, const size_t end) {
-  std::vector<char> sub_buf;
+void  Client::subBuf(const size_t start, const size_t end, std::vector<char>& sub_buf) {
   sub_buf.insert(sub_buf.begin(), _buf.begin() + start, _buf.begin() + end);
-  return sub_buf;
 }
 
 void Client::setLastRequestTime(const time_t& last_request_time) {

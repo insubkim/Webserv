@@ -134,22 +134,22 @@ void Server::disconnectClient(Client* client) {
 }
 
 void Server::connectClient(int server_socket) {
-  int client_socket;
+  int         client_socket;
   sockaddr_in client_address;
-  socklen_t client_len = sizeof(client_address);
+  socklen_t   client_len = sizeof(client_address);
 
   if ((client_socket = accept(server_socket, (struct sockaddr*)&client_address, &client_len)) == -1){
     std::cout << "accept error" << std::endl;
     return ;
   }
   fcntl(client_socket, F_SETFL, O_NONBLOCK, FD_CLOEXEC);
-  char client_ip[INET_ADDRSTRLEN];
+  char  client_ip[INET_ADDRSTRLEN];
   inet_ntop(AF_INET, &client_address.sin_addr, client_ip, INET_ADDRSTRLEN);
   uint16_t client_port = ntohs(client_address.sin_port);
   setSocketOption(client_socket);
 
   std::cout << "Accepted connection from " << client_ip << ":" << client_port <<
-               ", Client fd: " << client_socket << '\n' << std::endl;
+               ", Client fd: " << client_socket << std::endl;
   std::set<Client>::iterator it = _clients.insert(Client(client_socket, _server_sockets[server_socket], getTime(), KEEPALIVETIMEOUT)).first;
   _clients_address.insert((Client*)&(*it));
   changeEvents(_change_list, client_socket, EVFILT_READ, EV_ADD | EV_ENABLE, 0,
@@ -160,11 +160,11 @@ void Server::connectClient(int server_socket) {
 
 void Server::sendHttpResponse(int client_fd, Client& client, int64_t event_size) { 
   std::queue<HttpResponse>& responses = client.getRess();
-  const char* buf;
-  int         idx;
-  int         write_size;
-  std::string message;
-  if (!client.getIsTimeOut() && (responses.empty() || !responses.front().getIsReady())) return ;
+  const char*               buf;
+  int                       idx;
+  int                       write_size;
+  std::string               message;
+  // if (!client.getIsTimeOut() && (responses.empty() || !responses.front().getIsReady())) return ;
   if (client.getIsTimeOut()) {
     message = HttpResponse::timeOutMessage();
     buf = message.c_str();
@@ -180,6 +180,7 @@ void Server::sendHttpResponse(int client_fd, Client& client, int64_t event_size)
     idx = responses.front().getHeaderIdx();
     write_size = (int)std::strlen(buf) - idx > event_size ? event_size : std::strlen(buf) - idx;
   }
+
   int n = write(client_fd, &buf[idx], write_size);
   if (n < 0){
     disconnectClient(&client);
@@ -327,14 +328,15 @@ void              Server::handleError(struct kevent& curr_event) {
 void Server::recvHttpRequest(int client_fd, Client& cli, int64_t event_size) {
   if (cli.getEof()) return ;
   
-  int n = read(client_fd, _buf, event_size > BUF_SIZE ? BUF_SIZE : event_size);
+  int n = read(client_fd, _buf, min(event_size, (int64_t)BUF_SIZE));
 
-  if (n > 0)  cli.addBuf(_buf, n);
-  if (n == 0) {
+  if (n > 0) {
+    cli.addBuf(_buf, n);
+  } else if (n == 0) {
     if (cli.getRess().empty())cli.setEof(true);
     else cli.getRess().back().setEof(true);
-  }
-  if (n < 0){
+    return ;
+  } else if (n < 0){
     disconnectClient(&cli);
     return ;
   }
@@ -372,7 +374,8 @@ void Server::recvHttpRequest(int client_fd, Client& cli, int64_t event_size) {
     HttpDecoder             hd;
     HttpRequest&            req = cli.addReqs().backRequest();
     size_t                  size = static_cast<size_t>(idx);
-    const std::vector<char> data = cli.subBuf(cli.getReadIdx(), cli.getReadIdx() + size);
+    std::vector<char>       data;
+    cli.subBuf(cli.getReadIdx(), cli.getReadIdx() + size, data);
     cli.addReadIdx(size);
     hd.setCallback(
         NULL, HttpRequest::sParseUrl,
@@ -385,7 +388,6 @@ void Server::recvHttpRequest(int client_fd, Client& cli, int64_t event_size) {
       req.setSessionId();
       if (isJoinedSession(req.getSessionId())) {
         SessionBlock& sb = _session_blocks[req.getSessionId()];
-
         sb.renewExp();
       }
       printReq(req, data, false);
@@ -421,29 +423,32 @@ void Server::recvHttpRequest(int client_fd, Client& cli, int64_t event_size) {
 
 void  Server::sendCgiRequest(int cgi_fd, Client& client, int64_t event_size){
   if (client.getEof()) return ;
-  HttpResponse& res =  client.getResponseByCgiFd(cgi_fd);
-  if (res.getIsReady()) return ;
-  CgiHandler& cgi_handler = res.getCgiHandler();
-
-  int n = 0;
-  int idx = cgi_handler.getCgiReqEntityIdx();
+  HttpResponse&             res =  client.getResponseByCgiFd(cgi_fd);
+  CgiHandler&               cgi_handler = res.getCgiHandler();
+  const HttpRequest&        req = cgi_handler.getRequest();
+  const std::vector<char>&  entity = req.getEntity();
+  int                       n = 0;
+  int64_t                   idx = cgi_handler.getCgiReqEntityIdx();
+  if (res.getIsReady()) {
+    cgi_handler.closeWritePipe();
+    return ;
+  }
 
   if (DEBUGMOD && DEBUG_DETAIL_KEVENT)  std::cout << "Cgi request send idx : " << idx << std::endl;
   
-  n = write(cgi_fd, &(cgi_handler.getRequest().getEntity())[idx], \
-    (int64_t)cgi_handler.getRequest().getEntity().size() - idx > event_size ? event_size : cgi_handler.getRequest().getEntity().size() - idx);
+  n = write(cgi_fd, &(entity)[idx], min(event_size, (int64_t)entity.size() - idx));
   if (n < 0) {
     cgi_handler.closeWritePipe();
-    res.publishError(503, &cgi_handler.getRouteRule(), cgi_handler.getRequest().getMethod());
+    res.publishError(503, &cgi_handler.getRouteRule(), req.getMethod());
     res.setEof(true);
     if (client.getRess().front().getIsReady())
       changeEvents(_change_list, cgi_handler.getClientFd(), EVFILT_WRITE, EV_ENABLE, 0, 0, &client);
     return ;
   }
+
   idx += n;
-  
   cgi_handler.setCgiReqEntityIdx(idx);
-  if ((size_t)idx >= cgi_handler.getRequest().getEntity().size()) cgi_handler.closeWritePipe();
+  if (idx >= (int64_t)entity.size()) cgi_handler.closeWritePipe();
 
   if (DEBUGMOD && DEBUG_DETAIL_KEVENT)  std::cout << "send end"  << std::endl;
 }
@@ -492,18 +497,18 @@ void  Server::recvCgiResponse(int cgi_fd, Client& client, int64_t event_size) {
 }
 
 void Server::init(void) {
+  // ignore signal when cgi signal broken pipe
   signal(SIGPIPE, SIG_IGN); 
+
   _kq = kqueue();
   if (_kq == -1) throw std::runtime_error("Error: kqueue fail.");
 
-  std::map<std::pair<std::string, int>, Host>::iterator it = _hosts.begin();
   std::set<int> ports;
-  while (it != _hosts.end()) {
+  for (std::map<std::pair<std::string, int>, Host>::iterator it = _hosts.begin(); it != _hosts.end(); it++) {
     Host& h = it->second;
-    if (ports.find(h.getPort()) != ports.end()) {
-      it++;
-      continue;
-    }
+
+    if (ports.find(h.getPort()) != ports.end()) continue;
+    
     int socket_fd = socket(PF_INET, SOCK_STREAM, 0);
     if (socket_fd == -1) throw std::runtime_error("Error: socket failed.");
     fcntl(socket_fd, F_SETFL, O_NONBLOCK, FD_CLOEXEC);
@@ -522,15 +527,17 @@ void Server::init(void) {
     std::cout << "socket fd: " << socket_fd << std::endl;
     changeEvents(_change_list, socket_fd, EVFILT_READ, EV_ADD | EV_ENABLE, 0,
                   0, NULL);
-    it++;
   }
+  // timer event
   changeEvents(_change_list, 0, EVFILT_TIMER, EV_ADD | EV_ENABLE, 0, 1000, NULL);
 }
 
 void Server::run(void) {
   std::cout << "Server started." << '\n' << std::endl;
-  int new_event;
+  
+  int           new_event;
   struct kevent event_list[EVENT_LIST_SIZE];
+  
   while (1) {
     new_event = kevent(_kq, &(_change_list[0]), _change_list.size(), event_list,
                        EVENT_LIST_SIZE, NULL);
@@ -538,6 +545,7 @@ void Server::run(void) {
     _change_list.clear();
     for (int i = 0; i < new_event; ++i) {
       struct kevent& curr_event = event_list[i];
+
       if (DEBUGMOD) printKeventLog(new_event, i, curr_event);
 
       switch (identfyEvent(curr_event))
@@ -577,15 +585,16 @@ void Server::run(void) {
 }
 
 const RouteRule* Server::findRouteRule(const HttpRequest& req, const int& host_port) {
-  std::pair<std::string, int> key(req.getHost(), host_port);
-  if (_hosts.count(key))  
-    return (_hosts[key].getRouteRule(req.getLocation()));
-  else
-    return (_default_host.getRouteRule(req.getLocation()));
+  const std::string&                host_name = req.getHost();
+  const std::string&                location = req.getLocation();
+  const std::pair<std::string, int> key(host_name, host_port);
+
+  return _hosts.count(key) ? _hosts[key].getRouteRule(location) : _default_host.getRouteRule(location);
 }
 
 time_t Server::getTime(void) {
   struct timeval tv;
+
   gettimeofday(&tv, NULL);
   return tv.tv_sec;
 }
@@ -593,10 +602,8 @@ time_t Server::getTime(void) {
 void      Server::checkTimeout(void){
   std::vector<std::string>  session_keys;
 
-  std::set<Client>::iterator it = _clients.begin();
-  for (; it != _clients.end(); ++it) {
-    if (getTime() - it->getLastRequestTime() > it->getTimeoutInterval()) {
-      //timeout
+  for (std::set<Client>::iterator it = _clients.begin(); it != _clients.end(); ++it) {
+    if (getTime() - it->getLastRequestTime() > it->getTimeoutInterval()) { // set time out flag
       Client& client = const_cast<Client&>(*it);
       client.setIsTimeOut(true);
       changeEvents(_change_list, client.getClientFd(), EVFILT_WRITE, EV_ENABLE, 0, 0, &(client));
@@ -615,60 +622,3 @@ void      Server::checkTimeout(void){
 bool                                                       Server::isJoinedSession(const std::string& session_id) { return _session_blocks.find(session_id) != _session_blocks.end(); }
 const std::map<std::string, SessionBlock>::const_iterator  Server::getSessionBlock(const std::string& session_id) { return _session_blocks.find(session_id); }
 
-
-
-
-/*
-
- if (curr_event.flags & EV_ERROR) {
-        handleErrorKevent(curr_event.ident, curr_event.udata);
-      // cgi process exit event
-      } else if (curr_event.filter == EVFILT_PROC && (curr_event.fflags & NOTE_EXIT)) {
-        int status = -1;
-        waitpid(curr_event.ident, &status, WNOHANG);
-        std::cout << "waitpid :" << curr_event.ident << " status: " << WEXITSTATUS(status) << std::endl;
-        if (WEXITSTATUS(status) != 0 && _clients_address.count((Client*)curr_event.udata)) {
-          Client& client = *(Client *)(curr_event.udata);
-          if (client.getEof()) continue ;
-          HttpResponse& res = client.getResponseByPid(curr_event.ident);
-          if (res.getEof()) continue ;
-          res.publishError(503, &(res.getCgiHandler().getRouteRule()), res.getMethod());
-          res.setEof(true);
-          if (client.getRess().front().getIsReady())
-            changeEvents(_change_list, res.getCgiHandler().getClientFd(), EVFILT_WRITE, EV_ENABLE, 0, 0, &client);
-        }
-      } else if ((curr_event.flags & EV_EOF) && _clients_address.count((Client*)curr_event.udata) 
-                && ((Client*)curr_event.udata)->getClientFd() == (int)curr_event.ident) {
-        if(DEBUG_DETAIL_KEVENT) std::cout << "+ Socket disconnect event" << std::endl;
-        disconnectClient((Client*)curr_event.udata);
-      } else if (curr_event.filter == EVFILT_TIMER) {  // timer event
-        checkTimeout();
-      } else if (curr_event.filter == EVFILT_READ) {
-        if (_server_sockets.count(curr_event.ident)) {  // socket read event
-          connectClient(curr_event.ident);
-        } else if (_clients_address.count((Client*)curr_event.udata) 
-                && ((Client*)curr_event.udata)->getClientFd() == (int)curr_event.ident) {  // client read event
-          Client& client = *(Client*)curr_event.udata;
-          client.setLastRequestTime(getTime());
-          try{
-            recvHttpRequest(curr_event.ident, client, curr_event.data);
-          } catch (std::exception& e) { //fork, pipe exception
-            std::cout << e.what() << std::endl;
-            HttpResponse& res = client.getRess().back();
-            res.publishError(502, &(res.getCgiHandler().getRouteRule()), res.getMethod());
-            if (client.getRess().front().getIsReady())
-              changeEvents(_change_list, res.getCgiHandler().getClientFd(), EVFILT_WRITE, EV_ENABLE, 0, 0, &client);
-            res.setEof(true);
-          }
-        } else if (_clients_address.count((Client*)curr_event.udata)) {  // cgi read event
-          recvCgiResponse(curr_event.ident, *(Client*)curr_event.udata, curr_event.data);
-        }
-      } else if (curr_event.filter == EVFILT_WRITE && _clients_address.count((Client*)curr_event.udata)) {  //write event
-        if (((Client*)curr_event.udata)->getClientFd() == (int)curr_event.ident){ // client write event
-          sendHttpResponse(curr_event.ident, *(Client*)curr_event.udata, curr_event.data);
-        } else { // cgi write event
-          sendCgiRequest(curr_event.ident, *(Client*)curr_event.udata, curr_event.data);
-        }
-      }
-
-*/

@@ -10,6 +10,8 @@
 #include "HttpResponse.hpp"
 #include "Client.hpp"
 
+#define BUF_SIZE 4096
+
 HttpResponse::HttpResponse(const HttpRequest& req, const RouteRule& route_rule) : _http_major(1), _http_minor(1), _status(0), \
   _content_length(0), _is_chunked(false), _is_ready(false) , _is_cgi(false), _cgi_handler(req, route_rule), _method(HPS::kHEAD), \
   _entity_idx(0) ,_header_idx(0), _is_header_sent(false), _is_session_block(false), _is_logout_req(false), _eof(false) {
@@ -17,7 +19,6 @@ HttpResponse::HttpResponse(const HttpRequest& req, const RouteRule& route_rule) 
     _body.reserve(RESPONSE_BUF_SIZE);
   }
 
-#define BUF_SIZE 4096
 
 void HttpResponse::initContentTypes(void) {
   const char* extensions[] = {
@@ -37,52 +38,40 @@ void HttpResponse::initContentTypes(void) {
 
 void                                      HttpResponse::readFile(const std::string& path){
   std::ifstream i(path.c_str());
-  if (i.fail()){
-      throw FileNotFoundException();
-  }
-  char buf[BUF_SIZE];
+  char          buf[BUF_SIZE];
+  if (i.fail()) throw FileNotFoundException();
   while (true){
     i.read(buf, BUF_SIZE);
     _body.insert(_body.end(), buf, buf + i.gcount());
-    if (i.eof()){
-      break ;
-    }
-    if (i.fail()){
-      throw FileNotFoundException();
-    }
+    if (i.eof()) break ;
+    if (i.fail()) throw FileNotFoundException();
+    
   }
   _headers["Content-Type"] = (path.rfind('.') != std::string::npos ? _contentTypes[path.substr(path.rfind('.'))] : "text/html");
 }
 
 void                                      HttpResponse::readDir(const std::string& path){
-  DIR* dir = opendir((path).c_str());
-  struct dirent* entry;
-  if (dir == NULL){
-    throw FileNotFoundException();
-  }
-  std::string br = "<br />";
+  DIR*            dir = opendir((path).c_str());
+  struct dirent*  entry;
+  std::string     br = "<br />";
+  if (dir == NULL)  throw FileNotFoundException();
+  
   while ((entry = readdir(dir)) != NULL) {
-    if (entry->d_name[0] == '.')
-      continue ;
+    if (entry->d_name[0] == '.')  continue ;
     _body.insert(_body.end(), entry->d_name, entry->d_name + strlen(entry->d_name));
-
     _body.insert(_body.end(), br.begin(), br.end());
   }
   closedir(dir);
 }
 
 void                                      HttpResponse::deleteFile(const std::string& path){
-  if (unlink(path.c_str()) != 0){
-    _status = 500;
-  }
+  if (unlink(path.c_str()) != 0)  _status = 500;
 }
 
 
 bool                                      HttpResponse::isDir(const std::string& location){
   struct stat stat_buf;
-  if (stat(location.c_str(), &stat_buf) != 0)
-    return false;
-  return S_ISDIR(stat_buf.st_mode);
+  return stat(location.c_str(), &stat_buf) != 0 ? false :  S_ISDIR(stat_buf.st_mode);
 }
 
 void                                      HttpResponse::publish(const HttpRequest& req, const RouteRule* rule, const Client& client) {
@@ -104,19 +93,13 @@ void                                      HttpResponse::publish(const HttpReques
           publishError(413, rule, _method);
         } else if (rule->getRedirection().first) {
           _status = rule->getRedirection().first;
-          if (300 <= _status && _status < 400) {
-            _headers["Location"] = rule->getRedirection().second;
-          }
-          addContentLength();
-          return ;
+          _headers["Location"] = rule->getRedirection().second;
         } else if (rule->getIsCgi()){
-          //cgi set
           initializeCgiProcess(req, *rule, req.getHost(), client.getPort(), client.getClientFd());
           _is_cgi = true;
           _is_ready = false;
-          return ;
         } else if (isDir(rule->getRoot() + suffix_of_location)) {
-            _status = 200;
+          _status = 200;
           if (_method == HPS::kDELETE){
             deleteFile(rule->getRoot() + suffix_of_location);
           } else if (rule->getIndexPage().size() &&
@@ -146,8 +129,8 @@ void                                      HttpResponse::publish(const HttpReques
 }
 
 void                                      HttpResponse::publishCgi(const std::vector<char>::const_iterator& begin, const std::vector<char>::const_iterator& end,  const RouteRule& rule, enum HPS::Method method) {
-  std::string key;
-  std::string value;
+  std::string                       key;
+  std::string                       value;
 
   std::vector<char>::const_iterator it = begin;
   std::vector<char>::const_iterator start = begin;

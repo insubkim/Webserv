@@ -31,6 +31,7 @@
 
 class Server {
  private:
+
   enum Event {
     kEventConnectNewClient = 0,
     kEventClientClosedSocket,
@@ -105,6 +106,12 @@ class Server {
 
   bool                                                      isJoinedSession(const std::string& session_id);
   const std::map<std::string, SessionBlock>::const_iterator getSessionBlock(const std::string& session_id);
+
+  template <typename T>
+  T min(T first, T second) {
+    return first < second ? first : second;
+  }
+
 };
 
 #endif
