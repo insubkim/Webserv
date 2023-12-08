@@ -37,25 +37,31 @@ class HttpResponse {
     std::vector<char>                         _body;
 
     bool                                      _is_ready;
+
+    // unlike static html request. cgi request needs additional handling with kqueue
     bool                                      _is_cgi;
     CgiHandler                                _cgi_handler;
 
-    HPS::Method                               _method;
-    
+    // using response is sent with kqueue events, so needs starting point 
     int                                       _entity_idx;
     int                                       _header_idx;
     bool                                      _is_header_sent;
 
     std::map<std::string, std::string>        _contentTypes;
 
+    // session
     bool                                      _is_session_block;
     bool                                      _is_logout_req;
     SessionBlock                              _session_block;
 
+    // client has to disconnect after sending this message
+    // some situation like publish_error()
     bool                                      _eof;
 
-    void                                      readDir(const std::string& path);
+    // request
+    HPS::Method                               _request_method;
 
+    void                                      readDir(const std::string& path);
   public:
     HttpResponse(const HttpRequest& req, const RouteRule& route_rule);
 

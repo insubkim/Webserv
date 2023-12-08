@@ -1,6 +1,4 @@
-#include <fstream>
 #include <dirent.h>
-#include <sstream>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -10,10 +8,10 @@
 #include "HttpResponse.hpp"
 #include "Client.hpp"
 
-#define BUF_SIZE 4096
+#define READ_FILE_BUF_SIZE 4096
 
 HttpResponse::HttpResponse(const HttpRequest& req, const RouteRule& route_rule) : _http_major(1), _http_minor(1), _status(0), \
-  _content_length(0), _is_chunked(false), _is_ready(false) , _is_cgi(false), _cgi_handler(req, route_rule), _method(HPS::kHEAD), \
+  _content_length(0), _is_chunked(false), _is_ready(false) , _is_cgi(false), _cgi_handler(req, route_rule), _request_method(HPS::kHEAD), \
   _entity_idx(0) ,_header_idx(0), _is_header_sent(false), _is_session_block(false), _is_logout_req(false), _eof(false) {
     this->initContentTypes();
     _body.reserve(RESPONSE_BUF_SIZE);
@@ -21,12 +19,12 @@ HttpResponse::HttpResponse(const HttpRequest& req, const RouteRule& route_rule) 
 
 
 void HttpResponse::initContentTypes(void) {
-  const char* extensions[] = {
+  static const char* extensions[] = {
     ".html", ".css", ".js", ".png", ".jpg",
     ".jpeg", ".gif", ".json", ".pdf", ".zip",
     ".tar", ".gz", ".mp4", ".mp3", ".avi",
     ".mpeg", ".wav", ".ogg", ".xml", ".txt"};
-  const char* content_types[] = {
+  static const char* content_types[] = {
     "text/html", "text/css", "application/javascript", "image/png", "image/jpeg",
     "image/jpeg", "image/gif", "application/json", "application/pdf", "application/zip",
     "application/x-tar", "application/gzip", "video/mp4", "audio/mpeg", "video/x-msvideo",
@@ -38,10 +36,10 @@ void HttpResponse::initContentTypes(void) {
 
 void                                      HttpResponse::readFile(const std::string& path){
   std::ifstream i(path.c_str());
-  char          buf[BUF_SIZE];
+  char          buf[READ_FILE_BUF_SIZE];
   if (i.fail()) throw FileNotFoundException();
   while (true){
-    i.read(buf, BUF_SIZE);
+    i.read(buf, READ_FILE_BUF_SIZE);
     _body.insert(_body.end(), buf, buf + i.gcount());
     if (i.eof()) break ;
     if (i.fail()) throw FileNotFoundException();
@@ -76,9 +74,9 @@ bool                                      HttpResponse::isDir(const std::string&
 
 void                                      HttpResponse::publish(const HttpRequest& req, const RouteRule* rule, const Client& client) {
     const std::string& location = req.getLocation();
-    _method = req.getMethod();
+    _request_method = req.getMethod();
     if (!rule){
-      publishError(404, 0, _method);
+      publishError(404, 0, _request_method);
       return ;
     }
     const std::string  suffix_of_location(location.substr(rule->getRoute().size(), location.size() - rule->getRoute().size()));
@@ -86,11 +84,11 @@ void                                      HttpResponse::publish(const HttpReques
     _headers["Connection"] = "keep-alive";
     _is_ready = true;
     try{
-        if (!(rule->getAcceptedMethods() & (1 << _method))) {
-          publishError(405, rule, _method);
+        if (!(rule->getAcceptedMethods() & (1 << _request_method))) {
+          publishError(405, rule, _request_method);
         } else if (rule->getMaxClientBodySize() != 0 &&
                 rule->getMaxClientBodySize() < req.getEntity().size()) {
-          publishError(413, rule, _method);
+          publishError(413, rule, _request_method);
         } else if (rule->getRedirection().first) {
           _status = rule->getRedirection().first;
           _headers["Location"] = rule->getRedirection().second;
@@ -100,30 +98,30 @@ void                                      HttpResponse::publish(const HttpReques
           _is_ready = false;
         } else if (isDir(rule->getRoot() + suffix_of_location)) {
           _status = 200;
-          if (_method == HPS::kDELETE){
+          if (_request_method == HPS::kDELETE){
             deleteFile(rule->getRoot() + suffix_of_location);
           } else if (rule->getIndexPage().size() &&
               (rule->getRoute() == location || rule->getRoute() + '/' == location)) {  // index page event
-            if (_method != HPS::kHEAD)
+            if (_request_method != HPS::kHEAD)
               readFile(rule->getRoot() + "/" + rule->getIndexPage());
           } else if (rule->getAutoIndex() &&
                     (rule->getRoute() == location || rule->getRoute() + '/' == location)) {  // index page event
-            if (_method != HPS::kHEAD)
+            if (_request_method != HPS::kHEAD)
               readDir(rule->getRoot() + suffix_of_location);
           } else{
-            publishError(404, rule, _method);
+            publishError(404, rule, _request_method);
           }
         }else{
           _status = 200;
-          if (_method == HPS::kDELETE){
+          if (_request_method == HPS::kDELETE){
             deleteFile(rule->getRoot() + suffix_of_location);
-          } else if (_method != HPS::kHEAD)
+          } else if (_request_method != HPS::kHEAD)
             readFile(rule->getRoot() + suffix_of_location);
         }
     } catch (FileNotFoundException &e){
       std::cout << "requested url not found" << std::endl;
       std::cout << e.what() << std::endl;
-      publishError(404, rule, _method);
+      publishError(404, rule, _request_method);
     }
     addContentLength();
 }
@@ -202,10 +200,15 @@ void                                      HttpResponse::publishCgi(const std::ve
   addContentLength();
 }
 
+bool  checkErrorPage(int status, const RouteRule* rule) {
+  if (!rule) return false;
+  return rule->hasErrorPage(status);
+}
+
 void                                      HttpResponse::publishError(int status, const RouteRule* rule, enum HPS::Method method){
   _status = status;
   _is_ready = true;
-  if (!rule || !rule->hasErrorPage(status)){
+  if (checkErrorPage(status, rule)){
     std::stringstream ss;
     ss << _status;
     if (method != HPS::kHEAD) {
@@ -228,16 +231,16 @@ void                                      HttpResponse::publishError(int status,
   }
 }
 
-void                                      HttpResponse::initializeCgiProcess(
-  const HttpRequest& req, const RouteRule& rule, const std::string& server_name, const int& port, const int& client_fd) throw(std::runtime_error) {
+void  HttpResponse::initializeCgiProcess(
+  const HttpRequest& req, const RouteRule& rule, const std::string& server_name, const int& port, const int& client_fd) {
   _cgi_handler = CgiHandler(req, rule, server_name, port, client_fd);
 }
 
-int                                       HttpResponse::cgiExecute(const std::map<std::string, SessionBlock>::const_iterator& sbi, bool is_joined_session) throw(std::runtime_error) {
+int   HttpResponse::cgiExecute(const std::map<std::string, SessionBlock>::const_iterator& sbi, bool is_joined_session) {
   return _cgi_handler.execute(sbi, is_joined_session);
 }
 
-void                                      HttpResponse::addContentLength(void) {
+void  HttpResponse::addContentLength(void) {
   std::stringstream ss;
   ss << _body.size();
   _headers["Content-Length"] = ss.str();
@@ -257,7 +260,7 @@ const bool&                               HttpResponse::getIsReady() const { ret
 const bool&                               HttpResponse::getIsCgi() const { return _is_cgi; }
 const int&                                HttpResponse::getCgiPipeIn(void) const { return _cgi_handler.getReadPipeFromCgi(); }
 CgiHandler&                               HttpResponse::getCgiHandler() { return _cgi_handler; }
-HPS::Method                               HttpResponse::getMethod(void) const { return _method; }
+HPS::Method                               HttpResponse::getMethod(void) const { return _request_method; }
 const int&                                HttpResponse::getEntityIdx(void) const { return _entity_idx; };
 const int&                                HttpResponse::getHeaderIdx(void) const { return _header_idx; }
 const bool&                               HttpResponse::getIsHeaderSent(void) const { return _is_header_sent; }
@@ -274,8 +277,11 @@ void                                      HttpResponse::setHeaderIdx(int header_
 void                                      HttpResponse::setIsHeaderSent(bool is_header_sent) { _is_header_sent = is_header_sent; }
 void                                      HttpResponse::setEof(bool eof) { _eof = eof; }
 
-std::string                        HttpResponse::timeOutMessage() {
-  std::string message = "HTTP/1.1 408 Request Timeout\r\nContent-Type: text/html\r\nContent-Length: 0\r\n\r\n";
-  return message;  
+// static function
+std::string                               HttpResponse::timeOutMessage() {
+  static std::string message = \ 
+    "HTTP/1.1 408 Request Timeout\r\n\
+    Content-Type: text/html\r\n\
+    Content-Length: 0\r\n\r\n";
+  return message;
 }
-    
